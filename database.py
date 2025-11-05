@@ -265,6 +265,54 @@ class DatabaseManager:
         finally:
             session.close()
     
+    def get_predictions_by_date(self, date: datetime):
+        """Belirli bir tarihteki tüm tahminleri getir"""
+        session = self.get_session()
+        try:
+            # O günün başı ve sonu
+            start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            predictions = session.query(PredictionLog).filter(
+                PredictionLog.match_date >= start_of_day,
+                PredictionLog.match_date <= end_of_day
+            ).order_by(PredictionLog.match_date).all()
+            
+            # Session'dan ayır
+            for pred in predictions:
+                session.expunge(pred)
+            
+            return predictions
+        finally:
+            session.close()
+    
+    def get_prediction_stats(self):
+        """Genel tahmin istatistiklerini getir"""
+        session = self.get_session()
+        try:
+            total_predictions = session.query(PredictionLog).filter(
+                PredictionLog.is_correct.isnot(None)
+            ).count()
+            
+            correct_predictions = session.query(PredictionLog).filter(
+                PredictionLog.is_correct == True
+            ).count()
+            
+            wrong_predictions = session.query(PredictionLog).filter(
+                PredictionLog.is_correct == False
+            ).count()
+            
+            success_rate = (correct_predictions / total_predictions * 100) if total_predictions > 0 else 0
+            
+            return {
+                'total': total_predictions,
+                'correct': correct_predictions,
+                'wrong': wrong_predictions,
+                'success_rate': round(success_rate, 1)
+            }
+        finally:
+            session.close()
+    
     def get_user_stats(self, telegram_id: int):
         """Kullanıcı istatistiklerini getir"""
         session = self.get_session()

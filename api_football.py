@@ -62,6 +62,21 @@ class APIFootballService:
         
         return matches
     
+    def get_yesterday_matches(self) -> List[Dict]:
+        """Dünkü maçları getir - Türkiye saati ile"""
+        # Türkiye saati ile dünün tarihini al
+        turkey_tz = pytz.timezone('Europe/Istanbul')
+        yesterday = (datetime.now(turkey_tz) - timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        logger.info(f"Dünün maçları çekiliyor: {yesterday}")
+        
+        data = self._make_request('fixtures', {'date': yesterday})
+        matches = data.get('response', []) if data else []
+        
+        logger.info(f"{len(matches)} maç bulundu")
+        
+        return matches
+    
     def get_upcoming_matches(self, days: int = 3) -> List[Dict]:
         """Yaklaşan maçları getir"""
         matches = []

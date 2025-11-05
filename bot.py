@@ -7,6 +7,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -97,8 +98,9 @@ Haydi başlayalım! ⚽🎯
         keyboard = [
             [InlineKeyboardButton("⚽ Tahmin Al", callback_data="get_prediction")],
             [InlineKeyboardButton("📅 Bugünün Maçları", callback_data="today_matches")],
-            [InlineKeyboardButton("💎 Premium Ol", callback_data="premium_info")],
-            [InlineKeyboardButton("📊 İstatistiklerim", callback_data="my_stats")]
+            [InlineKeyboardButton("� Dünün Sonuçları", callback_data="yesterday_matches")],
+            [InlineKeyboardButton("�💎 Premium Ol", callback_data="premium_info")],
+            [InlineKeyboardButton("� İstatistiklerim", callback_data="my_stats")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -320,7 +322,194 @@ Haydi başlayalım! ⚽🎯
                 parse_mode='Markdown'
             )
     
-    async def get_prediction(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def yesterday_matches(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+        """Dünün maçlarını tahmin sonuçları ile göster"""
+        query = update.callback_query
+        if query:
+            await query.answer()
+            message = query.message
+            is_callback = True
+        else:
+            message = update.message
+            is_callback = False
+        
+        # Yükleniyor mesajı
+        if is_callback:
+            await query.edit_message_text("📊 Dünün maçları yükleniyor...\n⏳ Tahmin sonuçları kontrol ediliyor...")
+        else:
+            loading_msg = await message.reply_text("📊 Dünün maçları yükleniyor...\n⏳ Tahmin sonuçları kontrol ediliyor...")
+        
+        # Dünün maçlarını al
+        matches = api_service.get_yesterday_matches()
+        
+        if not matches:
+            error_text = (
+                "❌ Dün için maç bulunamadı.\n\n"
+                "🔙 Ana menüye dönmek için butona tıklayın."
+            )
+            keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if is_callback:
+                await query.edit_message_text(error_text, reply_markup=reply_markup)
+            else:
+                await loading_msg.edit_text(error_text, reply_markup=reply_markup)
+            return
+        
+        # Sadece bitmiş maçları göster
+        finished_matches = [m for m in matches if m['fixture']['status']['short'] == 'FT']
+        
+        if not finished_matches:
+            error_text = (
+                "ℹ️ Dün için henüz tamamlanmış maç yok.\n\n"
+                "🔙 Ana menüye dönmek için butona tıklayın."
+            )
+            keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if is_callback:
+                await query.edit_message_text(error_text, reply_markup=reply_markup)
+            else:
+                await loading_msg.edit_text(error_text, reply_markup=reply_markup)
+            return
+        
+        # Her maç için tahmin kontrolü yap
+        match_predictions = []
+        for match in finished_matches:
+            fixture_id = match['fixture']['id']
+            
+            # Bu maç için tahmin var mı?
+            cached_pred = db_manager.get_cached_prediction(fixture_id=fixture_id)
+            
+            if cached_pred:
+                # Tahmin varsa sonucu kontrol et
+                home_score = match['goals']['home']
+                away_score = match['goals']['away']
+                actual_result = f"{home_score}-{away_score}"
+                
+                # Tahmin parse et
+                try:
+                    prediction_data = json.loads(cached_pred.prediction)
+                    predicted_result = prediction_data['result']
+                    
+                    # Gerçek sonucu belirle
+                    if home_score > away_score:
+                        actual_winner = 'home_win'
+                    elif away_score > home_score:
+                        actual_winner = 'away_win'
+                    else:
+                        actual_winner = 'draw'
+                    
+                    is_correct = (predicted_result == actual_winner)
+                    
+                    # Veritabanını güncelle
+                    if cached_pred.is_correct is None:
+                        db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
+                    
+                    match_predictions.append({
+                        'match': match,
+                        'prediction': prediction_data,
+                        'is_correct': is_correct,
+                        'actual_result': actual_result,
+                        'confidence': cached_pred.confidence
+                    })
+                except Exception as e:
+                    logger.error(f"Tahmin parse hatası: {e}")
+        
+        # İstatistikler
+        total_with_prediction = len(match_predictions)
+        correct_count = sum(1 for mp in match_predictions if mp['is_correct'])
+        wrong_count = total_with_prediction - correct_count
+        success_rate = (correct_count / total_with_prediction * 100) if total_with_prediction > 0 else 0
+        
+        # Sayfalama
+        MATCHES_PER_PAGE = 10
+        total_matches = len(match_predictions)
+        total_pages = max(1, (total_matches + MATCHES_PER_PAGE - 1) // MATCHES_PER_PAGE)
+        
+        if page < 0:
+            page = 0
+        if page >= total_pages:
+            page = max(0, total_pages - 1)
+        
+        start_idx = page * MATCHES_PER_PAGE
+        end_idx = min(start_idx + MATCHES_PER_PAGE, total_matches)
+        page_matches = match_predictions[start_idx:end_idx]
+        
+        # Başlık
+        turkey_tz = pytz.timezone('Europe/Istanbul')
+        yesterday = (datetime.now(turkey_tz) - timedelta(days=1)).strftime('%d.%m.%Y')
+        
+        response = f"📅 **DÜN YAPILAN TAHMİNLER**\n"
+        response += f"📆 {yesterday} | Tahminli Maç: {total_with_prediction}\n\n"
+        
+        if total_with_prediction > 0:
+            response += f"**📊 BAŞARI İSTATİSTİKLERİ:**\n"
+            response += f"✅ Doğru: {correct_count}\n"
+            response += f"❌ Yanlış: {wrong_count}\n"
+            response += f"📈 Başarı Oranı: **{success_rate:.1f}%**\n"
+            response += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        if total_matches > 0:
+            response += f"📄 Sayfa: {page + 1}/{total_pages}\n\n"
+        
+        # Maçları listele
+        for mp in page_matches:
+            match = mp['match']
+            home = match['teams']['home']['name']
+            away = match['teams']['away']['name']
+            score = mp['actual_result']
+            
+            # Tahmin emoji
+            if mp['is_correct']:
+                status_emoji = "✅"
+            else:
+                status_emoji = "🔴"
+            
+            # Tahmin metni
+            pred_map = {
+                'home_win': f'🏠 {home}',
+                'away_win': f'✈️ {away}',
+                'draw': '⚖️ Beraberlik'
+            }
+            pred_text = pred_map.get(mp['prediction']['result'], 'N/A')
+            
+            response += f"{status_emoji} **{home} {score} {away}**\n"
+            response += f"   Tahmin: {pred_text} ({mp['confidence']:.0f}%)\n"
+            response += f"   Lig: {match['league']['name']}\n\n"
+        
+        # Sayfalama butonları
+        keyboard = []
+        nav_buttons = []
+        
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("◀️ Önceki", callback_data=f"yesterday_page_{page-1}"))
+        
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("▶️ Sonraki", callback_data=f"yesterday_page_{page+1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        # Alt butonlar
+        keyboard.append([InlineKeyboardButton("📅 Bugünün Maçları", callback_data="today_matches")])
+        keyboard.append([InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if is_callback:
+            await query.edit_message_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await loading_msg.edit_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+    
         """Tahmin al"""
         user = update.effective_user
         
@@ -902,8 +1091,9 @@ Haydi başlayalım! ⚽🎯
             keyboard = [
                 [InlineKeyboardButton("⚽ Tahmin Al", callback_data="get_prediction")],
                 [InlineKeyboardButton("📅 Bugünün Maçları", callback_data="today_matches")],
-                [InlineKeyboardButton("💎 Premium Ol", callback_data="premium_info")],
-                [InlineKeyboardButton("📊 İstatistiklerim", callback_data="my_stats")]
+                [InlineKeyboardButton("� Dünün Sonuçları", callback_data="yesterday_matches")],
+                [InlineKeyboardButton("�💎 Premium Ol", callback_data="premium_info")],
+                [InlineKeyboardButton("� İstatistiklerim", callback_data="my_stats")]
             ]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -918,10 +1108,16 @@ Haydi başlayalım! ⚽🎯
             await self.get_prediction(update, context)
         elif query.data == "today_matches":
             await self.today_matches(update, context, page=0)
+        elif query.data == "yesterday_matches":
+            await self.yesterday_matches(update, context, page=0)
         elif query.data.startswith("matches_page_"):
             # Sayfa değişikliği
             page = int(query.data.replace("matches_page_", ""))
             await self.today_matches(update, context, page=page)
+        elif query.data.startswith("yesterday_page_"):
+            # Dünün maçları sayfa değişikliği
+            page = int(query.data.replace("yesterday_page_", ""))
+            await self.yesterday_matches(update, context, page=page)
         elif query.data.startswith("pred_"):
             # Maç tahmin butonu - fixture_id'yi al
             fixture_id = query.data.replace("pred_", "")
@@ -951,6 +1147,7 @@ Haydi başlayalım! ⚽🎯
         self.app.add_handler(CommandHandler("yardim", self.help_command))
         self.app.add_handler(CommandHandler("help", self.help_command))
         self.app.add_handler(CommandHandler("bugun", self.today_matches))
+        self.app.add_handler(CommandHandler("dun", self.yesterday_matches))
         self.app.add_handler(CommandHandler("tahmin", self.get_prediction))
         self.app.add_handler(CommandHandler("premium", self.premium_info))
         self.app.add_handler(CommandHandler("istatistik", self.user_stats))
