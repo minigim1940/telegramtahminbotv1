@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import pytz
+from dateutil import parser as date_parser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -340,7 +341,12 @@ Haydi başlayalım! ⚽🎯
             loading_msg = await message.reply_text("📊 Dünün maçları yükleniyor...\n⏳ Tahmin sonuçları kontrol ediliyor...")
         
         # Dünün maçlarını al
-        matches = api_service.get_yesterday_matches()
+        try:
+            matches = api_service.get_yesterday_matches()
+            logger.info(f"API'den {len(matches) if matches else 0} maç alındı")
+        except Exception as e:
+            logger.error(f"API hatası: {e}")
+            matches = []
         
         if not matches:
             error_text = (
@@ -358,6 +364,7 @@ Haydi başlayalım! ⚽🎯
         
         # Sadece bitmiş maçları göster
         finished_matches = [m for m in matches if m['fixture']['status']['short'] == 'FT']
+        logger.info(f"Bitmiş maç sayısı: {len(finished_matches)}")
         
         if not finished_matches:
             error_text = (
@@ -375,13 +382,20 @@ Haydi başlayalım! ⚽🎯
         
         # Her maç için tahmin kontrolü yap
         match_predictions = []
+        logger.info(f"Tahmin kontrolü başlıyor, {len(finished_matches)} maç için...")
+        
         for match in finished_matches:
             fixture_id = match['fixture']['id']
+            home = match['teams']['home']['name']
+            away = match['teams']['away']['name']
+            
+            logger.info(f"Kontrol ediliyor: {home} vs {away} (ID: {fixture_id})")
             
             # Bu maç için tahmin var mı?
             cached_pred = db_manager.get_cached_prediction(fixture_id=fixture_id)
             
             if cached_pred:
+                logger.info(f"✅ Tahmin bulundu! Confidence: {cached_pred.confidence}")
                 # Tahmin varsa sonucu kontrol et
                 home_score = match['goals']['home']
                 away_score = match['goals']['away']
@@ -390,7 +404,29 @@ Haydi başlayalım! ⚽🎯
                 # Tahmin parse et
                 try:
                     prediction_data = json.loads(cached_pred.prediction)
-                    predicted_result = prediction_data['result']
+                    
+                    # Tahmin result'ı doğru yerden al
+                    if 'prediction' in prediction_data and 'result' in prediction_data['prediction']:
+                        # Yeni format: prediction.result
+                        predicted_text = prediction_data['prediction']['result']
+                    elif 'result' in prediction_data:
+                        # Eski format: direkt result
+                        predicted_text = prediction_data['result']
+                    else:
+                        logger.error(f"Tahmin formatı tanınmıyor: {prediction_data.keys()}")
+                        continue
+                    
+                    # Tahmin metnini result tipine çevir
+                    # "1 (Ev Sahibi Kazanır)" -> 'home_win'
+                    if '1' in predicted_text or 'Ev Sahibi' in predicted_text or 'home' in predicted_text.lower():
+                        predicted_result = 'home_win'
+                    elif '2' in predicted_text or 'Deplasman' in predicted_text or 'away' in predicted_text.lower():
+                        predicted_result = 'away_win'
+                    elif 'X' in predicted_text or 'Beraberlik' in predicted_text or 'draw' in predicted_text.lower():
+                        predicted_result = 'draw'
+                    else:
+                        logger.error(f"Tahmin metni parse edilemedi: {predicted_text}")
+                        continue
                     
                     # Gerçek sonucu belirle
                     if home_score > away_score:
@@ -401,6 +437,8 @@ Haydi başlayalım! ⚽🎯
                         actual_winner = 'draw'
                     
                     is_correct = (predicted_result == actual_winner)
+                    
+                    logger.info(f"📊 {home} vs {away}: Tahmin={predicted_result}, Gerçek={actual_winner}, Doğru={is_correct}")
                     
                     # Veritabanını güncelle
                     if cached_pred.is_correct is None:
@@ -414,7 +452,30 @@ Haydi başlayalım! ⚽🎯
                         'confidence': cached_pred.confidence
                     })
                 except Exception as e:
-                    logger.error(f"Tahmin parse hatası: {e}")
+                    logger.error(f"Tahmin parse hatası ({home} vs {away}): {e}")
+            else:
+                logger.info(f"❌ Tahmin bulunamadı: {home} vs {away}")
+        
+        logger.info(f"Toplam {len(match_predictions)} tahminli maç bulundu")
+        
+        # Eğer tahminli maç yoksa bilgi ver
+        if not match_predictions:
+            error_text = (
+                "ℹ️ Dün için tahmin yapılmış maç bulunamadı.\n\n"
+                f"📊 **TOPLAM BİTEN MAÇ:** {len(finished_matches)}\n"
+                "💡 Bu maçlar için tahmin yapılmamış.\n\n"
+                "🔹 Tahminli maçları görmek için bugünün maçlarından tahmin alın!\n\n"
+                "🔙 Ana menüye dönmek için butona tıklayın."
+            )
+            keyboard = [[InlineKeyboardButton("📅 Bugünün Maçları", callback_data="today_matches")],
+                       [InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if is_callback:
+                await query.edit_message_text(error_text, reply_markup=reply_markup)
+            else:
+                await loading_msg.edit_text(error_text, reply_markup=reply_markup)
+            return
         
         # İstatistikler
         total_with_prediction = len(match_predictions)
@@ -462,21 +523,37 @@ Haydi başlayalım! ⚽🎯
             
             # Tahmin emoji
             if mp['is_correct']:
-                status_emoji = "✅"
+                status_emoji = "✅ DOĞRU"
             else:
-                status_emoji = "🔴"
+                status_emoji = "🔴 YANLIŞ"
             
-            # Tahmin metni
-            pred_map = {
-                'home_win': f'🏠 {home}',
-                'away_win': f'✈️ {away}',
-                'draw': '⚖️ Beraberlik'
-            }
-            pred_text = pred_map.get(mp['prediction']['result'], 'N/A')
+            # Tahmin metnini al - prediction içinde result var
+            pred_data = mp['prediction']
+            if 'prediction' in pred_data and 'result' in pred_data['prediction']:
+                # Yeni format
+                predicted_text = pred_data['prediction']['result']
+            elif 'result' in pred_data:
+                # Eski format
+                predicted_text = pred_data['result']
+            else:
+                predicted_text = 'Bilinmiyor'
             
-            response += f"{status_emoji} **{home} {score} {away}**\n"
-            response += f"   Tahmin: {pred_text} ({mp['confidence']:.0f}%)\n"
-            response += f"   Lig: {match['league']['name']}\n\n"
+            # Tahmin için emoji ekle
+            if '1' in predicted_text or 'Ev Sahibi' in predicted_text:
+                pred_text = f"🏠 {home} Kazanır"
+            elif '2' in predicted_text or 'Deplasman' in predicted_text:
+                pred_text = f"✈️ {away} Kazanır"
+            elif 'X' in predicted_text or 'Beraberlik' in predicted_text:
+                pred_text = "⚖️ Beraberlik"
+            else:
+                pred_text = predicted_text
+            
+            response += f"{status_emoji}\n"
+            response += f"**{home} {score} {away}**\n"
+            response += f"📊 Tahmin: {pred_text}\n"
+            response += f"💯 Güven: {mp['confidence']:.0f}%\n"
+            response += f"🏆 Lig: {match['league']['name']}\n"
+            response += f"━━━━━━━━━━━━━━━━━━━━\n\n"
         
         # Sayfalama butonları
         keyboard = []
@@ -589,8 +666,27 @@ Haydi başlayalım! ⚽🎯
                             away_score = fixture_details['goals']['away']
                             actual_result = f"{home_score}-{away_score}"
                             
-                            # Tahmin doğru mu?
-                            predicted_result = analysis_data['prediction']['result']
+                            # Tahmin parse et - DOĞRU YER
+                            pred_data = analysis_data['prediction']
+                            if 'prediction' in pred_data and 'result' in pred_data['prediction']:
+                                predicted_text = pred_data['prediction']['result']
+                            elif 'result' in pred_data:
+                                predicted_text = pred_data['result']
+                            else:
+                                logger.error(f"Tahmin formatı tanınmıyor")
+                                predicted_text = ""
+                            
+                            # Tahmin metnini result tipine çevir
+                            if '1' in predicted_text or 'Ev Sahibi' in predicted_text or 'home' in predicted_text.lower():
+                                predicted_result = 'home_win'
+                            elif '2' in predicted_text or 'Deplasman' in predicted_text or 'away' in predicted_text.lower():
+                                predicted_result = 'away_win'
+                            elif 'X' in predicted_text or 'Beraberlik' in predicted_text or 'draw' in predicted_text.lower():
+                                predicted_result = 'draw'
+                            else:
+                                predicted_result = 'unknown'
+                            
+                            # Gerçek sonucu belirle
                             if home_score > away_score:
                                 actual_winner = 'home_win'
                             elif away_score > home_score:
@@ -600,8 +696,11 @@ Haydi başlayalım! ⚽🎯
                             
                             is_correct = (predicted_result == actual_winner)
                             
+                            logger.info(f"📊 Maç bitti - Tahmin:{predicted_result}, Gerçek:{actual_winner}, Doğru:{is_correct}")
+                            
                             # Veritabanını güncelle
-                            db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
+                            if cached_prediction.is_correct is None:
+                                db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
                             
                             analysis_data['is_correct'] = is_correct
                             analysis_data['match_result'] = actual_result
@@ -617,8 +716,31 @@ Haydi başlayalım! ⚽🎯
                     cached_prediction = None
             
             if not cached_prediction:
-                # Cache'de yok - yeni analiz yap
+                # Cache'de yok - ÖNCE MAÇIN DURUMUNU KONTROL ET
                 logger.info(f"🔄 Yeni tahmin yapılıyor: fixture_id={fixture_id}")
+                
+                # Maç başladı mı / bitti mi kontrol et
+                try:
+                    fixture_details = api_service.get_fixture_details(fixture_id)
+                    if fixture_details:
+                        match_status = fixture_details['fixture']['status']['short']
+                        
+                        # Eğer maç başladıysa veya bittiyse tahmin YAPMA!
+                        if match_status not in ['NS', 'TBD', 'PST']:  # NS=Not Started, TBD=To Be Defined, PST=Postponed
+                            error_msg = (
+                                "⚠️ Bu maç için tahmin yapılamaz!\n\n"
+                                f"📊 Maç Durumu: {match_status}\n\n"
+                                "💡 Sadece **başlamamış maçlar** için tahmin yapabilirsiniz.\n"
+                                "Bu, tahminlerin güvenilirliğini korumak içindir.\n\n"
+                                "🔙 Lütfen başka bir maç seçin."
+                            )
+                            keyboard = [[InlineKeyboardButton("📅 Bugünün Maçları", callback_data="today_matches")],
+                                      [InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")]]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+                            await loading_msg.edit_text(error_msg, reply_markup=reply_markup)
+                            return
+                except Exception as e:
+                    logger.warning(f"Maç durumu kontrol hatası: {e}")
                 
                 # Tahmin analizi
                 try:
@@ -748,13 +870,6 @@ Form: {''.join(away['form'])} (Skor: {away['form_score']}%)
 🏠 Ev Sahibi Galibiyeti: {h2h['home_wins']}
 ⚖️ Beraberlik: {h2h['draws']}
 ✈️ Deplasman Galibiyeti: {h2h['away_wins']}
-
-━━━━━━━━━━━━━━━━━━━━
-
-💡 **Not:** Bu tahmin, gelişmiş AI algoritmaları ve 
-gerçek zamanlı istatistiklerle oluşturulmuştur.
-
-🎯 İyi şanslar!
         """
         
         return report
@@ -784,7 +899,7 @@ gerçek zamanlı istatistiklerle oluşturulmuştur.
         prediction_text = result_map.get(pred['result'], pred['result'])
         
         report = f"""
-🎯 **TAHMİN ANALİZİ** (Kayıtlı Tahmin)
+🎯 **TAHMİN ANALİZİ**
 
 **⚽ Maç:** {match_info['match']}
 **🏆 Lig:** {match_info['league']}
@@ -805,15 +920,6 @@ gerçek zamanlı istatistiklerle oluşturulmuştur.
 📊 {pred.get('over_under', 'N/A')}
 🎯 BTTS: {pred.get('btts', 'N/A')} ({pred.get('btts_probability', 'N/A')}%)
 ⚽ Beklenen Gol: {pred.get('expected_goals', 'N/A')}
-
-━━━━━━━━━━━━━━━━━━━━
-
-💡 **Not:** Bu tahmin daha önce yapılmıştır ve
-değiştirilmemiştir. Maç başlamadan önceki
-orijinal analizdir.
-
-📌 **Önemli:** Tahminler maç bittikten sonra
-yeniden hesaplanmaz, orijinal tahmin gösterilir.
         """
         
         return report
@@ -1133,6 +1239,86 @@ Haydi başlayalım! ⚽🎯
         elif query.data.startswith("buy_"):
             await payment_handler.handle_purchase(update, context, query.data)
     
+    async def auto_predict_today_matches(self, context: ContextTypes.DEFAULT_TYPE):
+        """Bugünün tüm maçlarını otomatik olarak tahmin et ve kaydet"""
+        logger.info("🤖 Otomatik tahmin sistemi başlatıldı...")
+        
+        try:
+            # Bugünün maçlarını al
+            matches = api_service.get_today_matches()
+            
+            if not matches:
+                logger.info("📭 Bugün için maç bulunamadı")
+                return
+            
+            logger.info(f"📊 {len(matches)} maç bulundu, tahminler hesaplanıyor...")
+            
+            success_count = 0
+            skip_count = 0
+            error_count = 0
+            
+            for match in matches:
+                try:
+                    fixture_id = match['fixture']['id']
+                    home_team = match['teams']['home']['name']
+                    away_team = match['teams']['away']['name']
+                    match_datetime = match['fixture']['date']
+                    
+                    # Zaten tahmin var mı kontrol et
+                    existing_pred = db_manager.get_cached_prediction(fixture_id=fixture_id)
+                    if existing_pred:
+                        logger.info(f"⏭️ Atlanıyor (tahmin mevcut): {home_team} vs {away_team}")
+                        skip_count += 1
+                        continue
+                    
+                    # Tahmin yap
+                    logger.info(f"🔮 Tahmin yapılıyor: {home_team} vs {away_team}")
+                    result = prediction_engine.analyze_match(fixture_id)
+                    
+                    if result and result.get('prediction'):
+                        # Match info oluştur
+                        match_info = f"{home_team} vs {away_team} - {match['league']['name']}"
+                        
+                        # Maç tarihini parse et
+                        try:
+                            match_date = date_parser.parse(match_datetime) if match_datetime else datetime.now()
+                        except:
+                            match_date = datetime.now()
+                        
+                        # Tahmin bilgilerini al
+                        prediction_data = result.get('prediction', {})
+                        confidence = prediction_data.get('confidence', 0)
+                        
+                        # Eğer confidence None ise varsayılan değer kullan
+                        if confidence is None:
+                            confidence = 50.0
+                        
+                        # Veritabanına kaydet
+                        db_manager.log_prediction(
+                            user_id=0,  # Sistem tahmini (kullanıcı değil)
+                            fixture_id=fixture_id,
+                            match_info=match_info,
+                            prediction=json.dumps(result),
+                            confidence=float(confidence),
+                            match_date=match_date
+                        )
+                        
+                        pred_result = prediction_data.get('result', 'Unknown')
+                        logger.info(f"✅ Kaydedildi: {home_team} vs {away_team} - {pred_result} ({confidence:.1f}%)")
+                        success_count += 1
+                    else:
+                        logger.warning(f"⚠️ Tahmin alınamadı: {home_team} vs {away_team}")
+                        error_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"❌ Hata ({home_team} vs {away_team}): {e}")
+                    error_count += 1
+            
+            logger.info(f"🎯 Otomatik tahmin tamamlandı! ✅ {success_count} başarılı, ⏭️ {skip_count} atlandı, ❌ {error_count} hata")
+            
+        except Exception as e:
+            logger.error(f"❌ Otomatik tahmin sistemi hatası: {e}")
+    
     def run(self):
         """Botu başlat"""
         token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -1167,6 +1353,19 @@ Haydi başlayalım! ⚽🎯
         from admin_panel import setup_admin_handlers
         setup_admin_handlers(self.app, db_manager)
         logger.info("Admin komutları yüklendi!")
+        
+        # Otomatik tahmin zamanlayıcısı (Her gün sabah 08:00'de)
+        job_queue = self.app.job_queue
+        turkey_tz = pytz.timezone('Europe/Istanbul')
+        
+        # Her gün sabah 08:00'de çalış
+        job_queue.run_daily(
+            self.auto_predict_today_matches,
+            time=datetime.strptime("08:00", "%H:%M").time(),
+            days=(0, 1, 2, 3, 4, 5, 6),  # Her gün
+            name="auto_predict_daily"
+        )
+        logger.info("⏰ Otomatik tahmin zamanlayıcısı kuruldu (Her gün 08:00 Türkiye saati)")
         
         # Botu başlat
         logger.info("Bot başlatılıyor...")
