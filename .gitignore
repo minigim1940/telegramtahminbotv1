@@ -48,5 +48,11 @@ bot.log
 .DS_Store
 Thumbs.db
 
+# Generated files
+bot_logo.png
+*.png
+*.jpg
+*.jpeg
+
 # Git
 .git/
