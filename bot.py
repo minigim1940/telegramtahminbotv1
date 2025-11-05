@@ -708,8 +708,86 @@ Haydi başlayalım! ⚽🎯
                     except Exception as e:
                         logger.warning(f"Maç sonucu kontrol hatası: {e}")
                     
-                    # Raporu formatla (cache'den)
-                    report = self._format_cached_prediction_report(analysis_data)
+                    # Raporu formatla (cache'den) - TAM FORMAT KULLAN
+                    # Cache verilerini yeni format için dönüştür
+                    match_info = analysis_data['match_info']
+                    pred_data = analysis_data['prediction']
+                    
+                    # Yeni format için analysis objesi oluştur
+                    full_analysis = {
+                        'match': match_info.get('match', 'N/A'),
+                        'league': match_info.get('league', 'N/A'),
+                        'venue': match_info.get('venue', 'N/A'),
+                        'date': match_info.get('date', ''),
+                        'recommendation': match_info.get('recommendation', ''),
+                        'prediction': {
+                            'result': pred_data.get('result', 'N/A'),
+                            'confidence': analysis_data.get('confidence', 0),
+                            'probabilities': pred_data.get('probabilities', {}),
+                            'over_under': pred_data.get('over_under', 'N/A'),
+                            'btts': pred_data.get('btts', 'N/A'),
+                            'btts_probability': pred_data.get('btts_probability', 'N/A'),
+                            'expected_goals': pred_data.get('expected_goals', 'N/A')
+                        },
+                        'analysis': pred_data.get('analysis', {}),
+                        'betting_odds': pred_data.get('betting_odds', {})
+                    }
+                    
+                    # Bahis oranları yoksa API'den çek
+                    if not full_analysis['betting_odds'].get('available') and fixture_id:
+                        try:
+                            odds_data = api_service.get_odds(fixture_id)
+                            if odds_data:
+                                # Oranları formata uygun hale getir
+                                full_analysis['betting_odds'] = {
+                                    'available': True,
+                                    'bookmaker': odds_data.get('bookmaker', 'Bet365'),
+                                    'match_winner': odds_data.get('match_winner', {}),
+                                    'over_under_25': odds_data.get('over_under_25', {}),
+                                    'btts': odds_data.get('btts', {}),
+                                    'implied_probabilities': {}
+                                }
+                                
+                                # İmplied probabilities hesapla
+                                if odds_data.get('match_winner'):
+                                    mw = odds_data['match_winner']
+                                    full_analysis['betting_odds']['implied_probabilities']['match_winner'] = {}
+                                    if 'home' in mw:
+                                        full_analysis['betting_odds']['implied_probabilities']['match_winner']['home'] = (1/mw['home'])*100
+                                    if 'draw' in mw:
+                                        full_analysis['betting_odds']['implied_probabilities']['match_winner']['draw'] = (1/mw['draw'])*100
+                                    if 'away' in mw:
+                                        full_analysis['betting_odds']['implied_probabilities']['match_winner']['away'] = (1/mw['away'])*100
+                                
+                                if odds_data.get('over_under_25'):
+                                    ou = odds_data['over_under_25']
+                                    full_analysis['betting_odds']['implied_probabilities']['over_under'] = {}
+                                    if 'over' in ou:
+                                        full_analysis['betting_odds']['implied_probabilities']['over_under']['over'] = (1/ou['over'])*100
+                                    if 'under' in ou:
+                                        full_analysis['betting_odds']['implied_probabilities']['over_under']['under'] = (1/ou['under'])*100
+                                
+                                if odds_data.get('btts'):
+                                    btts = odds_data['btts']
+                                    full_analysis['betting_odds']['implied_probabilities']['btts'] = {}
+                                    if 'yes' in btts:
+                                        full_analysis['betting_odds']['implied_probabilities']['btts']['yes'] = (1/btts['yes'])*100
+                                    if 'no' in btts:
+                                        full_analysis['betting_odds']['implied_probabilities']['btts']['no'] = (1/btts['no'])*100
+                                        
+                        except Exception as e:
+                            logger.warning(f"Bahis oranları API'den alınamadı: {e}")
+                    
+                    # Sonuç indikatörü ekle (eğer maç bittiyse)
+                    result_note = ""
+                    if analysis_data.get('is_correct') is not None:
+                        if analysis_data['is_correct']:
+                            result_note = "\n\n✅ **TAHMİN DOĞRU!**"
+                        else:
+                            result_note = "\n\n🔴 **TAHMİN YANLIŞ!**"
+                        result_note += f"\n**📊 Gerçek Sonuç:** {analysis_data['match_result']}"
+                    
+                    report = self._format_prediction_report(full_analysis) + result_note
                     
                 except Exception as e:
                     logger.error(f"Cache parse hatası: {e}", exc_info=True)
@@ -777,9 +855,16 @@ Haydi başlayalım! ⚽🎯
                         fixture_id=fixture_id,
                         match_info=json.dumps({
                             'match': analysis['match'],
-                            'league': analysis['league']
+                            'league': analysis['league'],
+                            'venue': analysis.get('venue', 'N/A'),
+                            'date': analysis.get('date', ''),
+                            'recommendation': analysis.get('recommendation', '')
                         }),
-                        prediction=json.dumps(analysis['prediction']),
+                        prediction=json.dumps({
+                            **analysis['prediction'],
+                            'analysis': analysis.get('analysis', {}),
+                            'betting_odds': analysis.get('betting_odds', {})
+                        }),
                         confidence=analysis['prediction']['confidence'],
                         match_date=match_date
                     )
