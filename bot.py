@@ -649,6 +649,7 @@ Haydi başlayalım! ⚽🎯
                 try:
                     # JSON'dan parse et
                     analysis_data = {
+                        'fixture_id': fixture_id,  # Bahis oranları için gerekli
                         'match_info': json.loads(cached_prediction.match_info),
                         'prediction': json.loads(cached_prediction.prediction),
                         'confidence': cached_prediction.confidence,
@@ -941,6 +942,7 @@ Form: {''.join(away['form'])} (Skor: {away['form_score']}%)
         """Cache'den gelen tahmin raporunu formatla (orijinal tahmin gösterilir)"""
         match_info = analysis_data['match_info']
         pred = analysis_data['prediction']
+        fixture_id = analysis_data.get('fixture_id')
         
         # Tahmin sonucu göstergesi
         result_indicator = ""
@@ -984,6 +986,97 @@ Form: {''.join(away['form'])} (Skor: {away['form_score']}%)
 🎯 BTTS: {pred.get('btts', 'N/A')} ({pred.get('btts_probability', 'N/A')}%)
 ⚽ Beklenen Gol: {pred.get('expected_goals', 'N/A')}
         """
+        
+        # TAKIM ANALİZİ BÖLÜMÜ EKLE
+        if 'analysis' in pred:
+            analysis = pred['analysis']
+            team_analysis = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            team_analysis += "📊 **TAKIM ANALİZİ**\n\n"
+            
+            # Ev Sahibi Takım
+            if 'home_team' in analysis:
+                ht = analysis['home_team']
+                team_analysis += f"**🏠 {ht.get('name', 'Ev Sahibi')}**\n"
+                if 'form' in ht: team_analysis += f"📈 Form: {ht['form']}\n"
+                if 'goals_avg' in ht: team_analysis += f"⚽ Gol Ortalaması: {ht['goals_avg']}\n"
+                if 'win_rate' in ht: team_analysis += f"🎯 Kazanma Oranı: %{ht['win_rate']}\n"
+                team_analysis += "\n"
+            
+            # Deplasman Takım
+            if 'away_team' in analysis:
+                at = analysis['away_team']
+                team_analysis += f"**✈️ {at.get('name', 'Deplasman')}**\n"
+                if 'form' in at: team_analysis += f"📈 Form: {at['form']}\n"
+                if 'goals_avg' in at: team_analysis += f"⚽ Gol Ortalaması: {at['goals_avg']}\n"
+                if 'win_rate' in at: team_analysis += f"🎯 Kazanma Oranı: %{at['win_rate']}\n"
+            
+            report += team_analysis
+        
+        # BAHİS ORANLARI BÖLÜMÜ EKLE (API'den çek)
+        if fixture_id:
+            try:
+                from api_football import APIFootball
+                api = APIFootball()
+                odds_data = api.get_odds(fixture_id)
+                
+                if odds_data:
+                    betting_section = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                    betting_section += f"💰 **BAHİS ORANLARI** ({odds_data['bookmaker']})\n\n"
+                    
+                    # Maç Sonucu (1X2)
+                    if 'match_winner' in odds_data and odds_data['match_winner']:
+                        mw = odds_data['match_winner']
+                        betting_section += "**🎲 Maç Sonucu (1X2)**\n"
+                        
+                        # Oranları ve gerçek olasılıkları göster
+                        if 'home' in mw:
+                            impl_prob = (1 / mw['home']) * 100
+                            betting_section += f"🏠 MS1: {mw['home']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        if 'draw' in mw:
+                            impl_prob = (1 / mw['draw']) * 100
+                            betting_section += f"🤝 X (Beraberlik): {mw['draw']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        if 'away' in mw:
+                            impl_prob = (1 / mw['away']) * 100
+                            betting_section += f"✈️ MS2: {mw['away']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        betting_section += "\n"
+                    
+                    # Alt/Üst 2.5
+                    if 'over_under_25' in odds_data and odds_data['over_under_25']:
+                        ou = odds_data['over_under_25']
+                        betting_section += "**📊 Alt/Üst 2.5 Gol**\n"
+                        
+                        if 'over' in ou:
+                            impl_prob = (1 / ou['over']) * 100
+                            betting_section += f"⬆️ Üst 2.5: {ou['over']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        if 'under' in ou:
+                            impl_prob = (1 / ou['under']) * 100
+                            betting_section += f"⬇️ Alt 2.5: {ou['under']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        betting_section += "\n"
+                    
+                    # Karşılıklı Gol
+                    if 'btts' in odds_data and odds_data['btts']:
+                        btts = odds_data['btts']
+                        betting_section += "**⚽ Karşılıklı Gol (KG)**\n"
+                        
+                        if 'yes' in btts:
+                            impl_prob = (1 / btts['yes']) * 100
+                            betting_section += f"✅ Var: {btts['yes']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                        
+                        if 'no' in btts:
+                            impl_prob = (1 / btts['no']) * 100
+                            betting_section += f"❌ Yok: {btts['no']:.2f} (%{impl_prob:.1f} olasılık)\n"
+                    
+                    report += betting_section
+                else:
+                    logger.info(f"Bahis oranları bulunamadı: fixture_id={fixture_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Bahis oranları alınamadı: {e}")
         
         return report
     
