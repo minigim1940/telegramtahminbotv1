@@ -826,6 +826,69 @@ Haydi başlayalım! ⚽🎯
         home = analysis['analysis']['home_team']
         away = analysis['analysis']['away_team']
         h2h = analysis['analysis']['h2h']
+        betting = analysis.get('betting_odds', {})
+        
+        # Bahis oranları bölümü
+        betting_section = ""
+        if betting.get('available'):
+            betting_section = f"\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            betting_section += f"**💰 BAHİS ORANLARI** ({betting.get('bookmaker', 'N/A')})\n\n"
+            
+            # 1X2 Oranları
+            if betting.get('match_winner'):
+                mw = betting['match_winner']
+                betting_section += f"**Maç Sonucu (1X2):**\n"
+                if 'home' in mw:
+                    betting_section += f"🏠 MS1: {mw['home']}\n"
+                if 'draw' in mw:
+                    betting_section += f"⚖️ Beraberlik: {mw['draw']}\n"
+                if 'away' in mw:
+                    betting_section += f"✈️ MS2: {mw['away']}\n"
+                
+                # Gerçek olasılıklar
+                if betting.get('implied_probabilities', {}).get('match_winner'):
+                    imp = betting['implied_probabilities']['match_winner']
+                    betting_section += f"\n**Gerçek Olasılıklar:**\n"
+                    if 'home' in imp:
+                        betting_section += f"🏠 MS1: {imp['home']:.1f}%\n"
+                    if 'draw' in imp:
+                        betting_section += f"⚖️ X: {imp['draw']:.1f}%\n"
+                    if 'away' in imp:
+                        betting_section += f"✈️ MS2: {imp['away']:.1f}%\n"
+            
+            # Over/Under 2.5
+            if betting.get('over_under_25'):
+                ou = betting['over_under_25']
+                betting_section += f"\n**Gol Sayısı (2.5):**\n"
+                if 'over' in ou:
+                    betting_section += f"📈 Üst 2.5: {ou['over']}\n"
+                if 'under' in ou:
+                    betting_section += f"📉 Alt 2.5: {ou['under']}\n"
+                
+                if betting.get('implied_probabilities', {}).get('over_under'):
+                    imp = betting['implied_probabilities']['over_under']
+                    betting_section += f"**Gerçek Olasılıklar:** "
+                    if 'over' in imp:
+                        betting_section += f"Üst {imp['over']:.1f}% / "
+                    if 'under' in imp:
+                        betting_section += f"Alt {imp['under']:.1f}%\n"
+            
+            # BTTS
+            if betting.get('btts'):
+                btts_odds = betting['btts']
+                betting_section += f"\n**Karşılıklı Gol (KG):**\n"
+                if 'yes' in btts_odds:
+                    betting_section += f"✅ KG Var: {btts_odds['yes']}\n"
+                if 'no' in btts_odds:
+                    betting_section += f"❌ KG Yok: {btts_odds['no']}\n"
+                
+                if betting.get('implied_probabilities', {}).get('btts'):
+                    imp = betting['implied_probabilities']['btts']
+                    betting_section += f"**Gerçek Olasılıklar:** "
+                    if 'yes' in imp:
+                        betting_section += f"Var {imp['yes']:.1f}% / "
+                    if 'no' in imp:
+                        betting_section += f"Yok {imp['no']:.1f}%\n"
         
         report = f"""
 🎯 **TAHMİN ANALİZİ**
@@ -851,7 +914,7 @@ Haydi başlayalım! ⚽🎯
 📊 {pred['over_under']}
 🎯 BTTS: {pred['btts']} ({pred['btts_probability']}%)
 ⚽ Beklenen Gol: {pred['expected_goals']}
-
+{betting_section}
 ━━━━━━━━━━━━━━━━━━━━
 
 **📊 TAKIM ANALİZİ**
@@ -1354,18 +1417,18 @@ Haydi başlayalım! ⚽🎯
         setup_admin_handlers(self.app, db_manager)
         logger.info("Admin komutları yüklendi!")
         
-        # Otomatik tahmin zamanlayıcısı (Her gün sabah 08:00'de)
+        # Otomatik tahmin zamanlayıcısı (Her gece 00:05'te)
         job_queue = self.app.job_queue
         turkey_tz = pytz.timezone('Europe/Istanbul')
         
-        # Her gün sabah 08:00'de çalış
+        # Her gece 00:05'te çalış (yeni günün maçları için)
         job_queue.run_daily(
             self.auto_predict_today_matches,
-            time=datetime.strptime("08:00", "%H:%M").time(),
+            time=datetime.strptime("00:05", "%H:%M").time(),
             days=(0, 1, 2, 3, 4, 5, 6),  # Her gün
             name="auto_predict_daily"
         )
-        logger.info("⏰ Otomatik tahmin zamanlayıcısı kuruldu (Her gün 08:00 Türkiye saati)")
+        logger.info("⏰ Otomatik tahmin zamanlayıcısı kuruldu (Her gece 00:05 Türkiye saati)")
         
         # Botu başlat
         logger.info("Bot başlatılıyor...")

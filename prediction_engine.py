@@ -73,6 +73,14 @@ class PredictionEngine:
                 logger.warning(f"API tahminleri alınamadı: {e}")
                 api_pred = None
             
+            # Bahis oranlarını al
+            try:
+                odds_data = self.api.get_odds(fixture_id)
+                logger.info(f"Bahis oranları alındı")
+            except Exception as e:
+                logger.warning(f"Bahis oranları alınamadı: {e}")
+                odds_data = None
+            
             # Tahmin hesapla
             prediction = self._calculate_prediction(
                 home_stats, away_stats, h2h, api_pred, fixture
@@ -80,7 +88,7 @@ class PredictionEngine:
             
             # Detaylı rapor oluştur
             report = self._generate_report(
-                fixture, home_stats, away_stats, h2h, prediction
+                fixture, home_stats, away_stats, h2h, prediction, odds_data
             )
             
             logger.info(f"Analiz tamamlandı")
@@ -347,13 +355,16 @@ class PredictionEngine:
     
     def _generate_report(self, fixture: Dict, home_stats: Dict,
                         away_stats: Dict, h2h: List[Dict],
-                        prediction: Dict) -> Dict:
+                        prediction: Dict, odds_data: Optional[Dict] = None) -> Dict:
         """Detaylı tahmin raporu oluştur"""
         
         home_team = fixture['teams']['home']['name']
         away_team = fixture['teams']['away']['name']
         
         h2h_analysis = self._analyze_h2h(h2h, fixture['teams']['home']['id'])
+        
+        # Bahis oranları analizi
+        betting_analysis = self._get_betting_odds_analysis(odds_data)
         
         report = {
             'fixture_id': fixture['fixture']['id'],
@@ -375,6 +386,8 @@ class PredictionEngine:
                 'btts_probability': round(prediction.get('btts_probability', 50.0), 1),
                 'expected_goals': prediction['expected_goals']
             },
+            
+            'betting_odds': betting_analysis,
             
             'analysis': {
                 'home_team': {
@@ -459,3 +472,83 @@ class PredictionEngine:
         logger.info(f"Toplam {len(predictions)} yüksek güvenli tahmin bulundu")
         
         return predictions[:10]  # En iyi 10 tahmin
+    
+    def _calculate_implied_probability(self, odds: float) -> float:
+        """Bahis oranından gerçek olasılığı hesapla (vig kaldırılmış)"""
+        if odds <= 1.0:
+            return 0.0
+        return (1 / odds) * 100
+    
+    def _normalize_probabilities(self, probabilities: Dict[str, float]) -> Dict[str, float]:
+        """Olasılıkları normalize et (toplam 100% olsun)"""
+        total = sum(probabilities.values())
+        if total == 0:
+            return probabilities
+        return {key: (value / total) * 100 for key, value in probabilities.items()}
+    
+    def _get_betting_odds_analysis(self, odds_data: Optional[Dict]) -> Dict:
+        """Bahis oranlarından detaylı analiz"""
+        if not odds_data:
+            return {
+                'available': False,
+                'bookmaker': 'N/A',
+                'match_winner': {},
+                'over_under_25': {},
+                'btts': {},
+                'value_bets': []
+            }
+        
+        result = {
+            'available': True,
+            'bookmaker': odds_data.get('bookmaker', 'Unknown'),
+            'match_winner': {},
+            'over_under_25': {},
+            'btts': {},
+            'implied_probabilities': {},
+            'value_bets': []
+        }
+        
+        # 1X2 Analizi
+        if odds_data.get('match_winner'):
+            mw = odds_data['match_winner']
+            result['match_winner'] = mw
+            
+            # Gerçek olasılıkları hesapla
+            implied = {}
+            if 'home' in mw:
+                implied['home'] = self._calculate_implied_probability(mw['home'])
+            if 'draw' in mw:
+                implied['draw'] = self._calculate_implied_probability(mw['draw'])
+            if 'away' in mw:
+                implied['away'] = self._calculate_implied_probability(mw['away'])
+            
+            # Normalize et (bookmaker margin'i kaldır)
+            result['implied_probabilities']['match_winner'] = self._normalize_probabilities(implied)
+        
+        # Over/Under 2.5 Analizi
+        if odds_data.get('over_under_25'):
+            ou = odds_data['over_under_25']
+            result['over_under_25'] = ou
+            
+            implied = {}
+            if 'over' in ou:
+                implied['over'] = self._calculate_implied_probability(ou['over'])
+            if 'under' in ou:
+                implied['under'] = self._calculate_implied_probability(ou['under'])
+            
+            result['implied_probabilities']['over_under'] = self._normalize_probabilities(implied)
+        
+        # BTTS Analizi
+        if odds_data.get('btts'):
+            btts = odds_data['btts']
+            result['btts'] = btts
+            
+            implied = {}
+            if 'yes' in btts:
+                implied['yes'] = self._calculate_implied_probability(btts['yes'])
+            if 'no' in btts:
+                implied['no'] = self._calculate_implied_probability(btts['no'])
+            
+            result['implied_probabilities']['btts'] = self._normalize_probabilities(implied)
+        
+        return result

@@ -120,12 +120,67 @@ class APIFootballService:
         data = self._make_request('predictions', {'fixture': fixture_id})
         return data.get('response', [{}])[0] if data else None
     
-    def get_odds(self, fixture_id: int) -> List[Dict]:
-        """Maç oranlarını getir"""
+    def get_odds(self, fixture_id: int) -> Optional[Dict]:
+        """Maç bahis oranlarını getir ve formatla"""
         data = self._make_request('odds', {
-            'fixture': fixture_id
+            'fixture': fixture_id,
+            'bookmaker': 1  # Bet365
         })
-        return data.get('response', []) if data else []
+        
+        if not data or not data.get('response'):
+            return None
+        
+        try:
+            odds_data = data['response'][0]
+            bookmakers = odds_data.get('bookmakers', [])
+            
+            if not bookmakers:
+                return None
+            
+            # İlk bookmaker'ı al (genellikle Bet365)
+            bookmaker = bookmakers[0]
+            bets = {bet['name']: bet['values'] for bet in bookmaker.get('bets', [])}
+            
+            # Bahis oranlarını parse et
+            result = {
+                'bookmaker': bookmaker.get('name', 'Unknown'),
+                'match_winner': {},  # 1X2
+                'over_under_25': {},  # Over/Under 2.5
+                'btts': {}  # Both Teams To Score
+            }
+            
+            # 1X2 (Match Winner)
+            if 'Match Winner' in bets:
+                for value in bets['Match Winner']:
+                    if value['value'] == 'Home':
+                        result['match_winner']['home'] = float(value['odd'])
+                    elif value['value'] == 'Draw':
+                        result['match_winner']['draw'] = float(value['odd'])
+                    elif value['value'] == 'Away':
+                        result['match_winner']['away'] = float(value['odd'])
+            
+            # Over/Under 2.5
+            if 'Goals Over/Under' in bets:
+                for value in bets['Goals Over/Under']:
+                    if '2.5' in value['value']:
+                        if 'Over' in value['value']:
+                            result['over_under_25']['over'] = float(value['odd'])
+                        elif 'Under' in value['value']:
+                            result['over_under_25']['under'] = float(value['odd'])
+            
+            # Both Teams To Score
+            if 'Both Teams Score' in bets:
+                for value in bets['Both Teams Score']:
+                    if value['value'] == 'Yes':
+                        result['btts']['yes'] = float(value['odd'])
+                    elif value['value'] == 'No':
+                        result['btts']['no'] = float(value['odd'])
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Odds parse hatası: {e}")
+            return None
     
     def get_league_standings(self, league_id: int, season: int) -> List[Dict]:
         """Lig sıralamasını getir"""
