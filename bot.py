@@ -918,63 +918,49 @@ Haydi başlayalım! ⚽🎯
         betting_section = ""
         if betting.get('available'):
             betting_section = f"\n━━━━━━━━━━━━━━━━━━━━\n\n"
-            betting_section += f"**💰 BAHİS ORANLARI** ({betting.get('bookmaker', 'N/A')})\n\n"
+            betting_section += f"**💰 BAHİS ORANLARI**\n\n"
             
             # 1X2 Oranları
             if betting.get('match_winner'):
                 mw = betting['match_winner']
+                imp = betting.get('implied_probabilities', {}).get('match_winner', {})
+                
                 betting_section += f"**Maç Sonucu (1X2):**\n"
                 if 'home' in mw:
-                    betting_section += f"🏠 MS1: {mw['home']}\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['home']:.1f}%)" if 'home' in imp else ""
+                    betting_section += f"🏠 MS1: {mw['home']}{prob_text}\n"
                 if 'draw' in mw:
-                    betting_section += f"⚖️ Beraberlik: {mw['draw']}\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['draw']:.1f}%)" if 'draw' in imp else ""
+                    betting_section += f"⚖️ X: {mw['draw']}{prob_text}\n"
                 if 'away' in mw:
-                    betting_section += f"✈️ MS2: {mw['away']}\n"
-                
-                # Gerçek olasılıklar
-                if betting.get('implied_probabilities', {}).get('match_winner'):
-                    imp = betting['implied_probabilities']['match_winner']
-                    betting_section += f"\n**Gerçek Olasılıklar:**\n"
-                    if 'home' in imp:
-                        betting_section += f"🏠 MS1: {imp['home']:.1f}%\n"
-                    if 'draw' in imp:
-                        betting_section += f"⚖️ X: {imp['draw']:.1f}%\n"
-                    if 'away' in imp:
-                        betting_section += f"✈️ MS2: {imp['away']:.1f}%\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['away']:.1f}%)" if 'away' in imp else ""
+                    betting_section += f"✈️ MS2: {mw['away']}{prob_text}\n"
             
             # Over/Under 2.5
             if betting.get('over_under_25'):
                 ou = betting['over_under_25']
+                imp = betting.get('implied_probabilities', {}).get('over_under', {})
+                
                 betting_section += f"\n**Gol Sayısı (2.5):**\n"
                 if 'over' in ou:
-                    betting_section += f"📈 Üst 2.5: {ou['over']}\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['over']:.1f}%)" if 'over' in imp else ""
+                    betting_section += f"📈 Üst 2.5: {ou['over']}{prob_text}\n"
                 if 'under' in ou:
-                    betting_section += f"📉 Alt 2.5: {ou['under']}\n"
-                
-                if betting.get('implied_probabilities', {}).get('over_under'):
-                    imp = betting['implied_probabilities']['over_under']
-                    betting_section += f"**Gerçek Olasılıklar:** "
-                    if 'over' in imp:
-                        betting_section += f"Üst {imp['over']:.1f}% / "
-                    if 'under' in imp:
-                        betting_section += f"Alt {imp['under']:.1f}%\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['under']:.1f}%)" if 'under' in imp else ""
+                    betting_section += f"📉 Alt 2.5: {ou['under']}{prob_text}\n"
             
             # BTTS
             if betting.get('btts'):
                 btts_odds = betting['btts']
+                imp = betting.get('implied_probabilities', {}).get('btts', {})
+                
                 betting_section += f"\n**Karşılıklı Gol (KG):**\n"
                 if 'yes' in btts_odds:
-                    betting_section += f"✅ KG Var: {btts_odds['yes']}\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['yes']:.1f}%)" if 'yes' in imp else ""
+                    betting_section += f"✅ KG Var: {btts_odds['yes']}{prob_text}\n"
                 if 'no' in btts_odds:
-                    betting_section += f"❌ KG Yok: {btts_odds['no']}\n"
-                
-                if betting.get('implied_probabilities', {}).get('btts'):
-                    imp = betting['implied_probabilities']['btts']
-                    betting_section += f"**Gerçek Olasılıklar:** "
-                    if 'yes' in imp:
-                        betting_section += f"Var {imp['yes']:.1f}% / "
-                    if 'no' in imp:
-                        betting_section += f"Yok {imp['no']:.1f}%\n"
+                    prob_text = f" (Gerçek Olasılık: {imp['no']:.1f}%)" if 'no' in imp else ""
+                    betting_section += f"❌ KG Yok: {btts_odds['no']}{prob_text}\n"
         
         report = f"""
 🎯 **TAHMİN ANALİZİ**
