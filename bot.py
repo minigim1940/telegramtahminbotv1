@@ -343,6 +343,7 @@ Haydi başlayalım! ⚽🎯
     
     async def specific_prediction(self, update: Update, context: ContextTypes.DEFAULT_TYPE, is_from_button: bool = False):
         """Belirli bir maç için tahmin"""
+        loading_msg = None
         try:
             # Fixture ID'yi al
             if is_from_button:
@@ -363,87 +364,115 @@ Haydi başlayalım! ⚽🎯
                 user = update.effective_user
                 loading_msg = await update.message.reply_text("🔄 Analiz yapılıyor, lütfen bekleyin...")
             
+            logger.info(f"Tahmin isteği: fixture_id={fixture_id}, user={user.id}")
+            
             db_user = db_manager.get_or_create_user(telegram_id=user.id)
             
             # ÖNCE CACHE'E BAK - Daha önce yapılmış tahmin var mı?
-            cached_prediction = db_manager.get_cached_prediction(fixture_id=fixture_id)
+            try:
+                cached_prediction = db_manager.get_cached_prediction(fixture_id=fixture_id)
+            except Exception as e:
+                logger.error(f"Cache okuma hatası: {e}")
+                cached_prediction = None
             
             if cached_prediction:
                 # Cache'den tahmin var - yeniden analiz yapma!
-                logger.info(f"Cache'den tahmin alındı: fixture_id={fixture_id}")
+                logger.info(f"✅ Cache'den tahmin alındı: fixture_id={fixture_id}")
                 
-                # JSON'dan parse et
-                analysis_data = {
-                    'match_info': json.loads(cached_prediction.match_info),
-                    'prediction': json.loads(cached_prediction.prediction),
-                    'confidence': cached_prediction.confidence,
-                    'match_date': cached_prediction.match_date,
-                    'is_correct': cached_prediction.is_correct,
-                    'match_result': cached_prediction.match_result
-                }
-                
-                # Maç sonucunu kontrol et (eğer maç bittiyse)
-                fixture_details = api_service.get_fixture_details(fixture_id)
-                if fixture_details and fixture_details['fixture']['status']['short'] == 'FT':
-                    # Maç bitti - sonucu kontrol et
-                    home_score = fixture_details['goals']['home']
-                    away_score = fixture_details['goals']['away']
-                    actual_result = f"{home_score}-{away_score}"
+                try:
+                    # JSON'dan parse et
+                    analysis_data = {
+                        'match_info': json.loads(cached_prediction.match_info),
+                        'prediction': json.loads(cached_prediction.prediction),
+                        'confidence': cached_prediction.confidence,
+                        'match_date': cached_prediction.match_date,
+                        'is_correct': cached_prediction.is_correct,
+                        'match_result': cached_prediction.match_result
+                    }
                     
-                    # Tahmin doğru mu?
-                    predicted_result = analysis_data['prediction']['result']
-                    if home_score > away_score:
-                        actual_winner = 'home_win'
-                    elif away_score > home_score:
-                        actual_winner = 'away_win'
-                    else:
-                        actual_winner = 'draw'
+                    # Maç sonucunu kontrol et (eğer maç bittiyse)
+                    try:
+                        fixture_details = api_service.get_fixture_details(fixture_id)
+                        if fixture_details and fixture_details['fixture']['status']['short'] == 'FT':
+                            # Maç bitti - sonucu kontrol et
+                            home_score = fixture_details['goals']['home']
+                            away_score = fixture_details['goals']['away']
+                            actual_result = f"{home_score}-{away_score}"
+                            
+                            # Tahmin doğru mu?
+                            predicted_result = analysis_data['prediction']['result']
+                            if home_score > away_score:
+                                actual_winner = 'home_win'
+                            elif away_score > home_score:
+                                actual_winner = 'away_win'
+                            else:
+                                actual_winner = 'draw'
+                            
+                            is_correct = (predicted_result == actual_winner)
+                            
+                            # Veritabanını güncelle
+                            db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
+                            
+                            analysis_data['is_correct'] = is_correct
+                            analysis_data['match_result'] = actual_result
+                    except Exception as e:
+                        logger.warning(f"Maç sonucu kontrol hatası: {e}")
                     
-                    is_correct = (predicted_result == actual_winner)
+                    # Raporu formatla (cache'den)
+                    report = self._format_cached_prediction_report(analysis_data)
                     
-                    # Veritabanını güncelle
-                    db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
-                    
-                    analysis_data['is_correct'] = is_correct
-                    analysis_data['match_result'] = actual_result
-                
-                # Raporu formatla (cache'den)
-                report = self._format_cached_prediction_report(analysis_data)
-                
-            else:
+                except Exception as e:
+                    logger.error(f"Cache parse hatası: {e}", exc_info=True)
+                    # Cache bozuksa yeni analiz yap
+                    cached_prediction = None
+            
+            if not cached_prediction:
                 # Cache'de yok - yeni analiz yap
-                logger.info(f"Yeni tahmin yapılıyor: fixture_id={fixture_id}")
+                logger.info(f"🔄 Yeni tahmin yapılıyor: fixture_id={fixture_id}")
                 
                 # Tahmin analizi
-                analysis = prediction_engine.analyze_match(fixture_id)
+                try:
+                    analysis = prediction_engine.analyze_match(fixture_id)
+                except Exception as e:
+                    logger.error(f"Tahmin motoru hatası: {e}", exc_info=True)
+                    analysis = None
                 
                 if not analysis:
-                    await loading_msg.edit_text(
+                    error_msg = (
                         "❌ Maç analizi yapılamadı.\n\n"
-                        "💡 Sebep: Maç verisi eksik veya erişilemiyor.\n"
-                        "🔄 Lütfen başka bir maç deneyin."
+                        "💡 Olası sebepler:\n"
+                        "• Maç verisi eksik veya erişilemiyor\n"
+                        "• API yanıt vermiyor\n"
+                        "• Geçersiz maç kodu\n\n"
+                        "🔄 Lütfen başka bir maç deneyin veya\n"
+                        "birkaç dakika sonra tekrar deneyin."
                     )
+                    await loading_msg.edit_text(error_msg)
                     return
                 
                 # Maç tarihini al
                 match_date = None
                 try:
                     match_date = datetime.fromisoformat(analysis['date'].replace('Z', '+00:00'))
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Tarih parse hatası: {e}")
                 
                 # Veritabanına kaydet
-                db_manager.log_prediction(
-                    user_id=db_user.id,
-                    fixture_id=fixture_id,
-                    match_info=json.dumps({
-                        'match': analysis['match'],
-                        'league': analysis['league']
-                    }),
-                    prediction=json.dumps(analysis['prediction']),
-                    confidence=analysis['prediction']['confidence'],
-                    match_date=match_date
-                )
+                try:
+                    db_manager.log_prediction(
+                        user_id=db_user.id,
+                        fixture_id=fixture_id,
+                        match_info=json.dumps({
+                            'match': analysis['match'],
+                            'league': analysis['league']
+                        }),
+                        prediction=json.dumps(analysis['prediction']),
+                        confidence=analysis['prediction']['confidence'],
+                        match_date=match_date
+                    )
+                    logger.info(f"✅ Tahmin veritabanına kaydedildi")
+                except Exception as e:
+                    logger.error(f"Veritabanı kayıt hatası: {e}")
                 
                 # Tahmin raporunu oluştur
                 report = self._format_prediction_report(analysis)
@@ -453,14 +482,31 @@ Haydi başlayalım! ⚽🎯
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await loading_msg.edit_text(report, parse_mode='Markdown', reply_markup=reply_markup)
+            logger.info(f"✅ Tahmin başarıyla gönderildi: fixture_id={fixture_id}")
             
         except (IndexError, ValueError) as e:
-            logger.error(f"Tahmin hatası: {e}")
-            await update.message.reply_text(
+            logger.error(f"Geçersiz fixture ID hatası: {e}")
+            error_msg = (
                 "❌ Geçersiz maç kodu.\n\n"
                 "💡 Kullanım: /tahmin[KOD]\n"
                 "📝 Örnek: /tahmin1479575"
             )
+            if loading_msg:
+                await loading_msg.edit_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
+        except Exception as e:
+            logger.error(f"Beklenmeyen tahmin hatası: {e}", exc_info=True)
+            error_msg = (
+                "❌ Bir hata oluştu.\n\n"
+                "Lütfen daha sonra tekrar deneyin.\n"
+                "Sorun devam ederse /yardim komutunu kullanın."
+            )
+            if loading_msg:
+                try:
+                    await loading_msg.edit_text(error_msg)
+                except:
+                    pass
     
     def _format_prediction_report(self, analysis: Dict) -> str:
         """Tahmin raporunu formatla"""
