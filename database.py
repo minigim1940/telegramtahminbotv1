@@ -84,8 +84,12 @@ class PredictionLog(Base):
     match_info = Column(Text)  # JSON string
     prediction = Column(Text)  # Tahmin detayları (JSON)
     confidence = Column(Float)  # Tahmin güven skoru
+    match_date = Column(DateTime, nullable=True)  # Maç tarihi
+    prediction_made_at = Column(DateTime, default=datetime.utcnow)  # Tahmin yapıldığı zaman
     created_at = Column(DateTime, default=datetime.utcnow)
     result = Column(String(20), nullable=True)  # won, lost, draw (sonuç belli olduğunda)
+    match_result = Column(String(50), nullable=True)  # Gerçek maç sonucu (örn: "2-1")
+    is_correct = Column(Boolean, nullable=True)  # Tahmin doğru mu?
     
     # İlişkiler
     user = relationship("User", back_populates="predictions_received")
@@ -212,7 +216,7 @@ class DatabaseManager:
             session.close()
     
     def log_prediction(self, user_id: int, fixture_id: int, match_info: str,
-                      prediction: str, confidence: float):
+                      prediction: str, confidence: float, match_date: datetime = None):
         """Tahmin kaydı oluştur"""
         session = self.get_session()
         try:
@@ -221,11 +225,43 @@ class DatabaseManager:
                 fixture_id=fixture_id,
                 match_info=match_info,
                 prediction=prediction,
-                confidence=confidence
+                confidence=confidence,
+                match_date=match_date
             )
             session.add(log)
             session.commit()
             return log
+        finally:
+            session.close()
+    
+    def get_cached_prediction(self, fixture_id: int, user_id: int = None):
+        """Daha önce yapılmış tahmin varsa getir"""
+        session = self.get_session()
+        try:
+            query = session.query(PredictionLog).filter_by(fixture_id=fixture_id)
+            if user_id:
+                query = query.filter_by(user_id=user_id)
+            
+            # En son yapılan tahmini getir
+            log = query.order_by(PredictionLog.created_at.desc()).first()
+            
+            if log:
+                # Session'dan ayır
+                session.expunge(log)
+            return log
+        finally:
+            session.close()
+    
+    def update_prediction_result(self, fixture_id: int, match_result: str, is_correct: bool):
+        """Maç bittiğinde tahmin sonucunu güncelle"""
+        session = self.get_session()
+        try:
+            predictions = session.query(PredictionLog).filter_by(fixture_id=fixture_id).all()
+            for pred in predictions:
+                pred.match_result = match_result
+                pred.is_correct = is_correct
+                pred.result = 'won' if is_correct else 'lost'
+            session.commit()
         finally:
             session.close()
     

@@ -365,38 +365,88 @@ Haydi başlayalım! ⚽🎯
             
             db_user = db_manager.get_or_create_user(telegram_id=user.id)
             
-            # DEMO MOD: Admin kontrolü YOK, herkes sınırsız kullanabilir
-            # Yetki kontrolü devre dışı (test için)
+            # ÖNCE CACHE'E BAK - Daha önce yapılmış tahmin var mı?
+            cached_prediction = db_manager.get_cached_prediction(fixture_id=fixture_id)
             
-            # Tahmin analizi
-            analysis = prediction_engine.analyze_match(fixture_id)
-            
-            if not analysis:
-                await loading_msg.edit_text(
-                    "❌ Maç analizi yapılamadı.\n\n"
-                    "💡 Sebep: Maç verisi eksik veya erişilemiyor.\n"
-                    "🔄 Lütfen başka bir maç deneyin."
+            if cached_prediction:
+                # Cache'den tahmin var - yeniden analiz yapma!
+                logger.info(f"Cache'den tahmin alındı: fixture_id={fixture_id}")
+                
+                # JSON'dan parse et
+                analysis_data = {
+                    'match_info': json.loads(cached_prediction.match_info),
+                    'prediction': json.loads(cached_prediction.prediction),
+                    'confidence': cached_prediction.confidence,
+                    'match_date': cached_prediction.match_date,
+                    'is_correct': cached_prediction.is_correct,
+                    'match_result': cached_prediction.match_result
+                }
+                
+                # Maç sonucunu kontrol et (eğer maç bittiyse)
+                fixture_details = api_service.get_fixture_details(fixture_id)
+                if fixture_details and fixture_details['fixture']['status']['short'] == 'FT':
+                    # Maç bitti - sonucu kontrol et
+                    home_score = fixture_details['goals']['home']
+                    away_score = fixture_details['goals']['away']
+                    actual_result = f"{home_score}-{away_score}"
+                    
+                    # Tahmin doğru mu?
+                    predicted_result = analysis_data['prediction']['result']
+                    if home_score > away_score:
+                        actual_winner = 'home_win'
+                    elif away_score > home_score:
+                        actual_winner = 'away_win'
+                    else:
+                        actual_winner = 'draw'
+                    
+                    is_correct = (predicted_result == actual_winner)
+                    
+                    # Veritabanını güncelle
+                    db_manager.update_prediction_result(fixture_id, actual_result, is_correct)
+                    
+                    analysis_data['is_correct'] = is_correct
+                    analysis_data['match_result'] = actual_result
+                
+                # Raporu formatla (cache'den)
+                report = self._format_cached_prediction_report(analysis_data)
+                
+            else:
+                # Cache'de yok - yeni analiz yap
+                logger.info(f"Yeni tahmin yapılıyor: fixture_id={fixture_id}")
+                
+                # Tahmin analizi
+                analysis = prediction_engine.analyze_match(fixture_id)
+                
+                if not analysis:
+                    await loading_msg.edit_text(
+                        "❌ Maç analizi yapılamadı.\n\n"
+                        "💡 Sebep: Maç verisi eksik veya erişilemiyor.\n"
+                        "🔄 Lütfen başka bir maç deneyin."
+                    )
+                    return
+                
+                # Maç tarihini al
+                match_date = None
+                try:
+                    match_date = datetime.fromisoformat(analysis['date'].replace('Z', '+00:00'))
+                except:
+                    pass
+                
+                # Veritabanına kaydet
+                db_manager.log_prediction(
+                    user_id=db_user.id,
+                    fixture_id=fixture_id,
+                    match_info=json.dumps({
+                        'match': analysis['match'],
+                        'league': analysis['league']
+                    }),
+                    prediction=json.dumps(analysis['prediction']),
+                    confidence=analysis['prediction']['confidence'],
+                    match_date=match_date
                 )
-                return
-            
-            # Ücretsiz hakkı kullan (istatistik için)
-            # if not is_premium:
-            #     db_user.use_free_prediction()
-            
-            # Tahmin raporunu oluştur
-            report = self._format_prediction_report(analysis)
-            
-            # Veritabanına kaydet
-            db_manager.log_prediction(
-                user_id=db_user.id,
-                fixture_id=fixture_id,
-                match_info=json.dumps({
-                    'match': analysis['match'],
-                    'league': analysis['league']
-                }),
-                prediction=json.dumps(analysis['prediction']),
-                confidence=analysis['prediction']['confidence']
-            )
+                
+                # Tahmin raporunu oluştur
+                report = self._format_prediction_report(analysis)
             
             # Ana menü butonu ekle
             keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="main_menu")]]
@@ -469,6 +519,65 @@ Form: {''.join(away['form'])} (Skor: {away['form_score']}%)
 gerçek zamanlı istatistiklerle oluşturulmuştur.
 
 🎯 İyi şanslar!
+        """
+        
+        return report
+    
+    def _format_cached_prediction_report(self, analysis_data: Dict) -> str:
+        """Cache'den gelen tahmin raporunu formatla (orijinal tahmin gösterilir)"""
+        match_info = analysis_data['match_info']
+        pred = analysis_data['prediction']
+        
+        # Tahmin sonucu göstergesi
+        result_indicator = ""
+        if analysis_data.get('is_correct') is not None:
+            if analysis_data['is_correct']:
+                result_indicator = "✅ **TAHMİN DOĞRU!**"
+            else:
+                result_indicator = "🔴 **UYARI: TAHMİN YANLIŞ!**"
+            
+            result_indicator += f"\n**📊 Gerçek Sonuç:** {analysis_data['match_result']}\n"
+        
+        # Tahmin tipini çevir
+        result_map = {
+            'home_win': '🏠 Ev Sahibi Kazanır',
+            'away_win': '✈️ Deplasman Kazanır',
+            'draw': '⚖️ Beraberlik'
+        }
+        
+        prediction_text = result_map.get(pred['result'], pred['result'])
+        
+        report = f"""
+🎯 **TAHMİN ANALİZİ** (Kayıtlı Tahmin)
+
+**⚽ Maç:** {match_info['match']}
+**🏆 Lig:** {match_info['league']}
+
+━━━━━━━━━━━━━━━━━━━━
+
+{result_indicator}
+
+**🎲 TAHMİN: {prediction_text}**
+**📊 Güven Oranı: {analysis_data['confidence']}%**
+
+**📈 Olasılıklar:**
+🏠 Ev Sahibi: {pred['probabilities']['home_win']}%
+⚖️ Beraberlik: {pred['probabilities']['draw']}%
+✈️ Deplasman: {pred['probabilities']['away_win']}%
+
+**⚽ Gol Tahminleri:**
+📊 {pred.get('over_under', 'N/A')}
+🎯 BTTS: {pred.get('btts', 'N/A')} ({pred.get('btts_probability', 'N/A')}%)
+⚽ Beklenen Gol: {pred.get('expected_goals', 'N/A')}
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 **Not:** Bu tahmin daha önce yapılmıştır ve
+değiştirilmemiştir. Maç başlamadan önceki
+orijinal analizdir.
+
+📌 **Önemli:** Tahminler maç bittikten sonra
+yeniden hesaplanmaz, orijinal tahmin gösterilir.
         """
         
         return report
