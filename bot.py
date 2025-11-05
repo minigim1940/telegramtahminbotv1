@@ -64,36 +64,36 @@ class FootballPredictionBot:
         )
         
         welcome_message = f"""
-🎯 **Futbol Tahmin Botuna Hoş Geldiniz!** ⚽
+⚽ **Profesyonel Futbol Tahmin Botu** 🎯
 
-Merhaba {user.first_name}! 
+Merhaba **{user.first_name}**! 
 
-🎁 **DEMO MOD AKTİF - Sınırsız Tahmin!** 🎁
+Ben yapay zeka destekli futbol tahmin botuyum. Detaylı maç analizleri, istatistikler ve bahis oranlarıyla size en güvenilir tahminleri sunuyorum.
 
-Bu bot, gelişmiş AI algoritmaları ve gerçek zamanlı istatistiklerle 
-futbol maçları için profesyonel tahminler sunar.
+━━━━━━━━━━━━━━━━━━━━
 
-**📊 Özellikler:**
-✅ Canlı maç tahminleri
-✅ Detaylı istatistiksel analiz
-✅ H2H (Kafa Kafaya) karşılaştırma
-✅ Form analizi
-✅ Over/Under tahminleri
-✅ BTTS (İki takım da gol atar mı?) tahmini
+**🎯 ÖZELLİKLER**
 
-**🎁 Test Sürümü:**
-💎 Sınırsız tahmin - Ücretsiz!
-💎 Tüm premium özellikler aktif!
-� Ödeme sistemi kapalı (test için)
+✅ Yapay Zeka Destekli Tahminler
+✅ Detaylı Takım Analizleri
+✅ Güncel Bahis Oranları
+✅ Gerçek Olasılık Hesaplamaları
+✅ Form ve İstatistik Analizi
+✅ Kafa Kafaya Karşılaştırma
+✅ Tüm Dünya Liglerinden Maçlar
 
-**📱 Komutlar:**
-/tahmin - Maç tahmini al
-/bugun - Bugünün maçları
-/premium - Premium paketler
-/istatistik - İstatistikleriniz
-/yardim - Yardım menüsü
+━━━━━━━━━━━━━━━━━━━━
 
-Haydi başlayalım! ⚽🎯
+**📊 DEMO MOD AKTİF**
+💎 Sınırsız tahmin hakkı - Tamamen ücretsiz!
+🎁 Test sürümünde tüm özellikler açık
+
+━━━━━━━━━━━━━━━━━━━━
+
+**� HEMEN BAŞLA**
+Aşağıdaki butonlardan birini seçerek başlayabilirsin!
+
+*Başarılı tahminler dilerim!* ⚽🎯
         """
         
         keyboard = [
