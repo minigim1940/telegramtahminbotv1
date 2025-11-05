@@ -510,6 +510,7 @@ Haydi başlayalım! ⚽🎯
                 parse_mode='Markdown'
             )
     
+    async def get_prediction(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tahmin al"""
         user = update.effective_user
         
