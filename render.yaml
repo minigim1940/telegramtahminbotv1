@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: telegram-tahmin-bot
+    env: python
+    region: frankfurt  # En yakın bölge
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: API_FOOTBALL_KEY
+        value: 6336fb21e17dea87880d3b133132a13f
+      - key: API_FOOTBALL_URL
+        value: https://v3.football.api-sports.io
+      - key: DATABASE_URL
+        value: sqlite:///football_bot.db
+      - key: FREE_PREDICTIONS_PER_DAY
+        value: 2
+      - key: TIMEZONE
+        value: Europe/Istanbul
+      - key: DAILY_PRICE
+        value: 50
+      - key: WEEKLY_PRICE
+        value: 200
+      - key: MONTHLY_PRICE
+        value: 500
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    autoDeploy: true
